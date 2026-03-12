@@ -22,14 +22,14 @@ Or from a terminal using Plover's bundled Python:
 ## Usage
 
 1. After installing, open Plover's **Plug-ins Manager**
-2. Find `steno_dojo`, click **Enable**, then **Apply**
+2. Find **plover-steno-dojo**, click **Enable**, then **Apply**
 3. Restart Plover
 4. The plugin starts automatically and listens on `ws://localhost:8086/`
 5. Open Steno Dojo — it will connect automatically
 
 ## Message format
 
-All messages are JSON objects sent to every connected client:
+All messages are JSON objects broadcast to every connected client:
 
 ```json
 {"type": "stroked", "stroke": "TEFT"}
@@ -43,6 +43,14 @@ git clone https://github.com/VincentCosta6/plover-steno-dojo
 cd plover-steno-dojo
 pip install -e .
 ```
+
+## Releasing
+
+1. Update `version = X.Y.Z` in `setup.cfg`
+2. Commit and push
+3. Create a GitHub Release tagged `vX.Y.Z`
+
+The publish workflow verifies the tag matches `setup.cfg` before uploading to PyPI.
 
 ## License
 
