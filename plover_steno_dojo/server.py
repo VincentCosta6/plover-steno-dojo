@@ -15,6 +15,7 @@ import struct
 import threading
 
 PORT = 8086
+VERSION = "0.2.0"
 
 
 # ─── Minimal WebSocket Server ─────────────────────────────────────────────────
@@ -118,6 +119,10 @@ class _WebSocketServer:
             with self._lock:
                 self._clients.add(conn)
 
+            # Send a hello message so the app can verify the plugin version
+            hello = self._make_frame(json.dumps({"type": "hello", "version": VERSION}).encode())
+            conn.sendall(hello)
+
             # Read loop — we don't need client→server messages, just keep alive
             conn.settimeout(60.0)
             while self._running:
@@ -191,6 +196,7 @@ class StenoDojo:
     and broadcasts stroke + machine state events to connected clients.
 
     Message format (JSON):
+      {"type": "hello",                 "version": "0.2.0"}           ← sent once on connect
       {"type": "stroked",               "stroke": "TEFT"}
       {"type": "machine_state_changed", "machine_type": "Gemini PR", "state": "connected"}
     """
