@@ -10,12 +10,14 @@ No external dependencies — uses only Python standard library.
 import base64
 import hashlib
 import json
+import os
 import socket
 import struct
+import sys
 import threading
 
 PORT = 8086
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 # ─── Minimal WebSocket Server ─────────────────────────────────────────────────
@@ -25,13 +27,14 @@ class _WebSocketServer:
 
     _MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-    def __init__(self, host: str = "localhost", port: int = PORT):
+    def __init__(self, host: str = "localhost", port: int = PORT, get_dictionaries=None):
         self._host = host
         self._port = port
         self._clients: set[socket.socket] = set()
         self._lock = threading.Lock()
         self._server_sock: socket.socket | None = None
         self._running = False
+        self._get_dictionaries = get_dictionaries
 
     def start(self) -> None:
         self._running = True
@@ -95,12 +98,29 @@ class _WebSocketServer:
                     return
                 raw += chunk
 
-            # Parse the WebSocket key out of headers
+            # Parse the WebSocket key and Origin out of headers
             headers: dict[str, str] = {}
             for line in raw.decode("utf-8", errors="replace").split("\r\n")[1:]:
                 if ":" in line:
                     k, _, v = line.partition(":")
                     headers[k.strip().lower()] = v.strip()
+
+            # Origin verification to prevent Cross-Site WebSocket Hijacking (CSWSH)
+            # Browsers will reliably send the Origin header. Non-browser clients might not.
+            # We strictly reject any Origin that isn't localhost or Tauri's custom protocols.
+            origin = headers.get("origin")
+            if origin:
+                allowed_prefixes = (
+                    "http://localhost",
+                    "https://localhost",
+                    "tauri://localhost",
+                    "https://tauri.localhost",
+                    "http://tauri.localhost",
+                    "asset://localhost",
+                )
+                if not origin.startswith(allowed_prefixes):
+                    conn.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+                    return
 
             key = headers.get("sec-websocket-key", "")
             accept = base64.b64encode(
@@ -122,6 +142,19 @@ class _WebSocketServer:
             # Send a hello message so the app can verify the plugin version
             hello = self._make_frame(json.dumps({"type": "hello", "version": VERSION}).encode())
             conn.sendall(hello)
+
+            # Send active dictionaries if available
+            if self._get_dictionaries:
+                try:
+                    dicts = self._get_dictionaries()
+                    if dicts:
+                        dicts_msg = self._make_frame(json.dumps({
+                            "type": "dictionaries", 
+                            "dictionaries": dicts
+                        }).encode())
+                        conn.sendall(dicts_msg)
+                except Exception:
+                    pass
 
             # Read loop — we don't need client→server messages, just keep alive
             conn.settimeout(60.0)
@@ -203,7 +236,36 @@ class StenoDojo:
 
     def __init__(self, engine) -> None:
         self._engine = engine
-        self._server = _WebSocketServer(port=PORT)
+        self._server = _WebSocketServer(port=PORT, get_dictionaries=self._get_active_dictionaries)
+
+    def _get_active_dictionaries(self) -> list[str]:
+        try:
+            dicts = self._engine.config.get("dictionaries", [])
+            paths = [str(d.get("path")) for d in dicts if d.get("enabled", False) and d.get("path")]
+            
+            # Attempt to make paths absolute if they are relative
+            abs_paths = []
+            config_dir = getattr(self._engine.config_manager, "config_dir", None)
+            
+            for p in paths:
+                if os.path.isabs(p):
+                    abs_paths.append(p)
+                elif config_dir:
+                    abs_paths.append(os.path.join(config_dir, p))
+                else:
+                    import platform
+                    sys_name = platform.system()
+                    if sys_name == "Windows":
+                        default_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "plover", "plover")
+                    elif sys_name == "Darwin":
+                        default_dir = os.path.expanduser("~/Library/Application Support/plover")
+                    else:
+                        default_dir = os.path.expanduser("~/.config/plover")
+                    abs_paths.append(os.path.join(default_dir, p))
+                    
+            return abs_paths
+        except Exception:
+            return []
 
     def start(self) -> None:
         self._server.start()
